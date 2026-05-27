@@ -1,0 +1,101 @@
+# DataSnake Weather Intelligence — Configuration
+# Edit values for your environment; secrets go in .env
+
+database:
+  host: localhost
+  port: 5432
+  name: weather_intelligence
+  pool_size: 10
+  pool_timeout: 30
+
+noaa:
+  # NOAA NCEI Access API — no token required for most endpoints
+  access_api_base: "https://www.ncei.noaa.gov/access/services/data/v1"
+  # CDO API requires a free token (fallback for station search)
+  cdo_api_base: "https://www.ncei.noaa.gov/cdo-web/api/v2"
+  dataset: "global-hourly"
+  lookback_days: 30
+  request_timeout_sec: 60
+  retry_attempts: 3
+  retry_backoff_sec: 5
+
+  regions:
+    miami_fl:
+      name: "Miami Beach, FL"
+      lat_min: 25.5
+      lat_max: 26.1
+      lon_min: -80.5
+      lon_max: -80.0
+      # NOAA station IDs for this region (WBAN + USAF format)
+      station_ids:
+        - "72202099999"   # Miami International Airport
+        - "99404199999"   # Miami Beach weather station
+
+    san_francisco_ca:
+      name: "San Francisco Bay Area, CA"
+      lat_min: 37.3
+      lat_max: 37.9
+      lon_min: -122.6
+      lon_max: -122.1
+      station_ids:
+        - "72494023234"   # San Francisco Intl Airport
+        - "72493099999"   # Oakland Metropolitan Airport
+
+    naples_fl:
+      name: "Naples, FL (Hurricane Ian)"
+      lat_min: 25.3
+      lat_max: 26.0
+      lon_min: -81.5
+      lon_max: -81.0
+      station_ids:
+        - "72213012867"   # Naples Municipal Airport
+
+usgs:
+  # USGS FDSN Event API — free, no auth
+  fdsn_api_base: "https://earthquake.usgs.gov/fdsnws/event/1"
+  lookback_days: 365
+  min_magnitude: 1.0
+  request_timeout_sec: 30
+  retry_attempts: 3
+
+  regions:
+    bay_area:
+      name: "San Francisco Bay Area"
+      lat_min: 37.0
+      lat_max: 38.5
+      lon_min: -122.8
+      lon_max: -121.5
+      radius_km: 150  # for point-based queries
+
+    southern_california:
+      name: "Southern California"
+      lat_min: 32.5
+      lat_max: 34.5
+      lon_min: -118.5
+      lon_max: -115.5
+
+risk:
+  flash_flood:
+    rainfall_baseline_mm: 40       # below this = no flood risk
+    saturation_threshold: 0.30     # below this = dry, low risk
+    saturation_range: 0.20         # denominator in EP curve formula
+    search_radius_km: 5
+    lookback_hours: 24
+
+  seismic_precursor:
+    search_radius_km: 100
+    lookback_days: 60
+    baseline_multiplier: 2.0       # lookback_days * 2 for baseline period
+    rising_threshold: 1.5          # current/baseline ratio for "RISING"
+    falling_threshold: 0.67
+
+  coastal_wind:
+    wind_baseline_ms: 15           # threshold for FL roof damage
+    wind_range_ms: 25
+    tidal_anomaly_baseline_m: 0.5
+
+logging:
+  level: INFO
+  format: "[%(asctime)s] %(levelname)s %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"
+  file: logs/ingestion.log

@@ -1,0 +1,37 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Data downloads (large files — reference via README_DATA_SOURCES.md)
+data/sample_datasets/**/*.csv
+data/sample_datasets/**/*.json
+data/sample_datasets/**/*.geojson
+!data/sample_datasets/.gitkeep
+
+# Reports output
+data/reports/
+*.pdf
+!docs/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
