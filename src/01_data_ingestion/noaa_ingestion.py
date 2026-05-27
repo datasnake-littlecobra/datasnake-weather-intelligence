@@ -70,8 +70,15 @@ NOAA_TOKEN = os.getenv("NOAA_API_TOKEN", "")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-def _fetch_noaa_page(params: dict) -> list[dict]:
+def _fetch_noaa_csv(params: dict) -> list[dict]:
+    """NOAA NCEI Access API — always request CSV; parse with pandas.
+
+    The global-hourly dataset returns well-formed CSV with named columns.
+    JSON format is technically supported but inconsistently shaped across
+    dataset versions; CSV is the stable path.
+    """
     headers = {"token": NOAA_TOKEN} if NOAA_TOKEN else {}
+    params = {**params, "format": "csv"}  # force CSV regardless of caller
     resp = requests.get(
         BASE_URL,
         params=params,
@@ -80,15 +87,16 @@ def _fetch_noaa_page(params: dict) -> list[dict]:
     )
     resp.raise_for_status()
 
-    # NOAA Access API returns CSV or JSON depending on format param
-    if params.get("format", "json") == "json":
-        data = resp.json()
-        return data if isinstance(data, list) else []
+    if not resp.text.strip():
+        return []
 
-    # CSV path: parse with pandas
     from io import StringIO
-    df = pd.read_csv(StringIO(resp.text), low_memory=False)
-    return df.to_dict(orient="records")
+    try:
+        df = pd.read_csv(StringIO(resp.text), low_memory=False)
+        return df.to_dict(orient="records")
+    except Exception as e:
+        log.warning("  CSV parse failed: %s", e)
+        return []
 
 
 def fetch_noaa_station_data(
@@ -102,90 +110,113 @@ def fetch_noaa_station_data(
         "stations": station_id,
         "startDate": start_date + "T00:00:00",
         "endDate": end_date + "T23:59:59",
-        "format": "json",
         "includeAttributes": "false",
         "units": "metric",
     }
     try:
-        records = _fetch_noaa_page(params)
+        records = _fetch_noaa_csv(params)
         log.debug("  Station %s: %d raw records", station_id, len(records))
         return records
     except requests.HTTPError as e:
-        if e.response.status_code == 404:
-            log.warning("  Station %s: no data for this period", station_id)
+        if e.response.status_code in (404, 400):
+            log.warning("  Station %s: no data returned (HTTP %s)", station_id, e.response.status_code)
             return []
         raise
 
 
 def parse_noaa_record(raw: dict, station_id: str) -> dict | None:
-    """Extract and validate fields from a NOAA global-hourly JSON record."""
+    """Extract and validate fields from a NOAA global-hourly CSV row.
+
+    NOAA ISD CSV columns:
+      STATION, DATE, SOURCE, LATITUDE, LONGITUDE, ELEVATION, NAME,
+      REPORT_TYPE, CALL_SIGN, QUALITY_PROCESS, WND, CIG, VIS, TMP, DEW,
+      SLP, AA1, ...
+
+    Comma-packed fields (e.g. WND="270,1,N,0010,1") are decoded by position.
+    All quality/sentinel values (9999, 999, etc.) are treated as null.
+    """
     try:
-        # NOAA global-hourly uses named fields; nulls come as "" or "9999"
-        def safe_float(val: Any, sentinel: float = 9999.9) -> float | None:
-            if val is None or val == "" or val == "9999" or val == "99999":
+        def safe_float(val: Any, sentinels: tuple = (9999, 99999, 999.9, 9999.9)) -> float | None:
+            if val is None or str(val).strip() in ("", "9999", "99999", "999", "999.9"):
                 return None
             try:
                 f = float(val)
-                return None if f >= sentinel else f
+                return None if f in sentinels or f > 9000 else f
             except (TypeError, ValueError):
                 return None
 
-        ts_str = raw.get("DATE") or raw.get("date")
+        # DATE column: "2024-05-15T14:00:00" or "2024-05-15 14:00:00"
+        ts_str = str(raw.get("DATE", "")).strip()
         if not ts_str:
             return None
+        ts_str = ts_str.replace(" ", "T")
+        if not ts_str.endswith("Z") and "+" not in ts_str:
+            ts_str += "+00:00"
+        ts = datetime.fromisoformat(ts_str)
 
-        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-
-        lat = safe_float(raw.get("LATITUDE") or raw.get("latitude"))
-        lon = safe_float(raw.get("LONGITUDE") or raw.get("longitude"))
+        lat = safe_float(raw.get("LATITUDE"))
+        lon = safe_float(raw.get("LONGITUDE"))
         if lat is None or lon is None:
             return None
 
-        # Temperature: NOAA reports in tenths of C, or direct Celsius
-        tmp = safe_float(raw.get("TMP") or raw.get("tmp") or raw.get("HourlyDryBulbTemperature"))
-        if tmp and abs(tmp) > 100:  # tenths of a degree
-            tmp = tmp / 10.0
+        # TMP field: "0232,1" → temp in tenths of Celsius, quality flag
+        tmp = None
+        tmp_raw = str(raw.get("TMP", "")).strip()
+        if tmp_raw and "," in tmp_raw:
+            tmp_parts = tmp_raw.split(",")
+            tmp_raw_val = safe_float(tmp_parts[0])
+            if tmp_raw_val is not None:
+                tmp = tmp_raw_val / 10.0  # tenths of C → C
+                if not (-80 < tmp < 60):
+                    tmp = None
 
-        # Wind speed: NOAA in m/s or tenths of m/s
-        wnd_raw = raw.get("WND") or raw.get("HourlyWindSpeed")
+        # DEW field: "0189,1" → dew point in tenths of Celsius
+        dew = None
+        dew_raw = str(raw.get("DEW", "")).strip()
+        if dew_raw and "," in dew_raw:
+            dew_parts = dew_raw.split(",")
+            dew_raw_val = safe_float(dew_parts[0])
+            if dew_raw_val is not None:
+                dew = dew_raw_val / 10.0
+
+        # WND field: "270,1,N,0085,1" → direction, dir-quality, obs-type, speed(tenths m/s), speed-quality
         wind_ms = None
         wind_dir = None
-        if wnd_raw:
-            if isinstance(wnd_raw, str) and "," in wnd_raw:
-                parts = wnd_raw.split(",")
-                wind_dir = safe_float(parts[0])
-                wind_ms = safe_float(parts[3])
-                if wind_ms and wind_ms > 100:
-                    wind_ms = wind_ms / 10.0
-            else:
-                wind_ms = safe_float(wnd_raw)
+        wnd_raw = str(raw.get("WND", "")).strip()
+        if wnd_raw and "," in wnd_raw:
+            wnd_parts = wnd_raw.split(",")
+            if len(wnd_parts) >= 4:
+                wind_dir = safe_float(wnd_parts[0])
+                if wind_dir and wind_dir > 360:
+                    wind_dir = None
+                spd = safe_float(wnd_parts[3])
+                if spd is not None:
+                    wind_ms = spd / 10.0  # tenths m/s → m/s
+                    if wind_ms > 100:
+                        wind_ms = None
 
-        # Precipitation: NOAA in tenths of mm
-        aa1_raw = raw.get("AA1") or raw.get("HourlyPrecipitation")
+        # AA1 field: "01,0000,2,5" → period hours, depth(tenths mm), condition, quality
         precip_mm = None
-        if aa1_raw:
-            if isinstance(aa1_raw, str) and "," in aa1_raw:
-                parts = aa1_raw.split(",")
-                precip_raw = safe_float(parts[1])
-                if precip_raw is not None:
-                    precip_mm = precip_raw / 10.0
-            else:
-                precip_mm = safe_float(aa1_raw)
+        aa1_raw = str(raw.get("AA1", "")).strip()
+        if aa1_raw and "," in aa1_raw:
+            aa1_parts = aa1_raw.split(",")
+            if len(aa1_parts) >= 2:
+                depth = safe_float(aa1_parts[1])
+                if depth is not None:
+                    precip_mm = depth / 10.0  # tenths mm → mm
 
-        # Pressure: NOAA SLP in tenths of hPa
-        slp_raw = raw.get("SLP") or raw.get("HourlySeaLevelPressure")
+        # SLP field: "10132,1" → pressure in tenths of hPa
         pressure_hpa = None
-        if slp_raw:
-            pressure_hpa = safe_float(slp_raw)
-            if pressure_hpa and pressure_hpa > 1100:
-                pressure_hpa = pressure_hpa / 10.0
+        slp_raw = str(raw.get("SLP", "")).strip()
+        if slp_raw and "," in slp_raw:
+            slp_parts = slp_raw.split(",")
+            slp_val = safe_float(slp_parts[0])
+            if slp_val is not None:
+                pressure_hpa = slp_val / 10.0  # tenths hPa → hPa
+                if not (800 < pressure_hpa < 1100):
+                    pressure_hpa = None
 
-        # Relative humidity
-        rh = safe_float(raw.get("RH") or raw.get("HourlyRelativeHumidity"))
-
-        station_name = (
-            raw.get("NAME") or raw.get("name") or raw.get("STATION_NAME") or ""
-        )
+        station_name = str(raw.get("NAME", "")).strip()
 
         return {
             "station_id": station_id,
@@ -194,15 +225,15 @@ def parse_noaa_record(raw: dict, station_id: str) -> dict | None:
             "longitude": lon,
             "measurement_time": ts.isoformat(),
             "temperature_celsius": tmp,
-            "relative_humidity_percent": rh,
+            "relative_humidity_percent": None,   # ISD doesn't carry RH directly
             "precipitation_mm": precip_mm,
             "wind_speed_ms": wind_ms,
             "wind_direction_degrees": wind_dir,
             "pressure_hpa": pressure_hpa,
-            "raw_record": json.dumps(raw),
+            "raw_record": json.dumps({k: str(v) for k, v in raw.items()}),
         }
     except Exception as e:
-        log.debug("  Failed to parse record: %s — %s", raw.get("DATE"), e)
+        log.debug("  Failed to parse record dated %s: %s", raw.get("DATE"), e)
         return None
 
 
