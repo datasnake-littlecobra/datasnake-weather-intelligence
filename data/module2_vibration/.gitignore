@@ -1,0 +1,17 @@
+# Raw/intermediate waveform data — large binary formats, never committed.
+# Scoped to this directory only; the repo's root .gitignore is untouched.
+*.hdf5
+*.h5
+*.mseed
+*.npy
+*.npz
+bronze/**
+silver/**
+gold/**
+!bronze/.gitkeep
+!silver/.gitkeep
+!gold/.gitkeep
+
+# Manifests ARE committed (small JSON, versioned dataset lineage) — do not ignore.
+!manifests/
+!manifests/*.json
