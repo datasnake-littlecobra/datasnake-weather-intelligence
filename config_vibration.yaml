@@ -1,0 +1,48 @@
+# DataSnake Weather Intelligence — Module 2 (Seismic/Vibration Intelligence) Configuration
+# Deliberately a SEPARATE file from config.yaml (which stays untouched) so Module 2
+# config changes never risk breaking the existing NOAA/USGS ingestion config.
+# Edit values for your environment; secrets go in .env (DATABASE_URL / DATABASE_POOLER_URL).
+
+datasets:
+  stead:
+    name: "STEAD"
+    license: "CC BY 4.0"
+    source: "seisbench.data.STEAD"
+    sample_size: 2000        # small sample for Phase 1 prototyping, not the full ~1M-trace dataset
+
+  instance:
+    name: "INSTANCE"
+    license: "CC BY 4.0"
+    source: "seisbench.data.InstanceCounts"   # SeisBench dataset class name for INSTANCE
+    sample_size: 2000
+
+model:
+  phase_picker: "PhaseNet"          # SeisBench pretrained model for phase-picking
+  pretrained_weights: "stead"       # SeisBench pretrained weight set
+  window_length_sec: 30
+  sampling_rate_hz: 100
+
+  event_types:
+    - seismic
+    - vehicle_human
+    - environmental
+    - unknown
+
+split:
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  group_by: "scenario_family_id"    # split at the family level, never per-record, to prevent leakage
+  random_seed: 42
+
+api:
+  cors_origins:
+    - "https://hyperlocalwatch.com"
+  route_prefix: "/events"
+  default_page_size: 50
+
+logging:
+  level: INFO
+  format: "[%(asctime)s] %(levelname)s %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"
+  file: logs/module2_pipeline.log

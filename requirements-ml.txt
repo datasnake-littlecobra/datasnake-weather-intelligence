@@ -8,6 +8,7 @@
 torch==2.3.1
 seisbench==0.7.0
 obspy==1.4.0
+scipy==1.13.1
 
 # API service
 fastapi==0.115.11
