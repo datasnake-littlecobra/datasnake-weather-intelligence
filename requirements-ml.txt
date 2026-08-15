@@ -1,0 +1,27 @@
+# Module 2 (Seismic/Vibration Intelligence) — ML pipeline + API dependencies.
+# Deliberately isolated from requirements.txt: the ingestion scripts in
+# src/01_data_ingestion/ have no need for torch/seisbench/fastapi, and this
+# keeps their install lean. Install with:
+#   pip install -r requirements-ml.txt
+
+# ML / seismic waveform classification
+torch==2.3.1
+seisbench==0.7.0
+obspy==1.4.0
+scipy==1.13.1
+
+# API service
+fastapi==0.115.11
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+
+# Reused from requirements.txt (repeated here so requirements-ml.txt installs standalone)
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.25
+python-dotenv==1.0.0
+PyYAML==6.0.1
+pandas==2.1.4
+numpy==1.26.3
+
+# Testing
+pytest==7.4.4
